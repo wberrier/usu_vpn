@@ -1,0 +1,28 @@
+Script to configure the USU vpn for a linux machine.
+
+This is tested and works on Ubuntu 10.10 as long as an updated openswan
+is installed (2.6.31 or later) that enables ALLOW_MICROSOFT_BAD_PROPOSAL.
+
+You can get one from:
+
+http://www.openswan.org/download/binaries/ubuntu/
+
+*NOTE* This script totally blows away the configuration for ppp,
+xl2tpd, and ipsec and replaces it with the necessary usu settings.  It
+also stores your credentials on the disk.
+
+It may work on other distros, I'm not sure.
+
+It's based on the setup that an ex USU sysadmin had posted (which may work
+with an updated openswan, but I haven't tried that)
+
+as well as on the info posted at:
+
+http://www.jacco2.dds.nl/networking/linux-l2tp.html
+
+This version doesn't make the vpn the default route, but only sets up the
+route necessary to connect to the usu subnet.
+
+This script doesn't use specific dns entries, since it appears that
+the public dns records worked fine.
+

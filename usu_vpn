@@ -9,6 +9,7 @@
 SERVER=129.123.67.252
 USU_NETWORK=129.123.0.0
 USU_NETWORK_NETMASK=255.255.0.0
+USU_GROUP_PASSWORD="aggies"
 
 # current gateway and interface
 GATEWAY=$(route -n |grep ^0.0.0.0 | grep -w UG | awk '{print $2}' | head -n 1)
@@ -27,24 +28,21 @@ checkroot()
         echo "Root or sudo privileges required."
         exit
     fi
+}
 
-    return;
+get_vpn_interface()
+{
+    # TODO: check for an existing ppp0 device
+    echo "ppp0"
 }
 
 start ()
 {
-    # TODO: restarting is still finicky
-
     # NOTE: we don't need to use usu dns since the hosts are public
 
-    /etc/init.d/ipsec restart
-    sleep 3
     ipsec auto --up L2TP-PSK-CLIENT
 
-    # (appears that "restart" isn't very reliable)
-    /etc/init.d/xl2tpd stop
-    /etc/init.d/xl2tpd start
-    sleep 3
+    vpn_interface=$(get_vpn_interface)
 
     # Clean up old log
     rm $L2TPD_LOG
@@ -55,7 +53,7 @@ start ()
         sleep 1
         count=$((count + 1))
         if [ $count -gt $TIMEOUT ] ; then
-            echo "Error: xl2tpd can't connect"
+            echo "Error: unable to start connection with xl2tpd"
             exit 1
         fi
     done
@@ -67,17 +65,15 @@ start ()
     route add -host $SERVER gw $GATEWAY dev $IFACE
 
     # Route all usu traffic through vpn
-    route add -net $USU_NETWORK netmask $USU_NETWORK_NETMASK  dev ppp0
+    route add -net $USU_NETWORK netmask $USU_NETWORK_NETMASK  dev $vpn_interface
 }
 
 stop ()
 {
     echo "d L2TPserver" > /var/run/xl2tpd/l2tp-control
-    /etc/init.d/xl2tpd stop
     tail $L2TPD_LOG
 
     ipsec auto --down L2TP-PSK-CLIENT
-    /etc/init.d/ipsec stop
 
     # Undo route
     route del -host $SERVER dev $IFACE 2> /dev/null
@@ -85,15 +81,175 @@ stop ()
 
 install_config ()
 {
-    echo -n "Please enter your USU ANumber: "
+    echo "Note: this will store your credentials on the computer"
+    echo ""
+    echo "Note: this program will modify your existing ipsec/xl2tpd config without making a backup"
+    echo ""
+
+    echo -n "USU ANumber: "
     read ANUMBER
 
-    echo -n "Please enter your USU password: "
+    echo -n "USU password: "
+    stty -echo
     read PASSWORD
+    stty echo
+    echo ""
 
-    echo $PASSWORD
+    echo "Writing out the configuration files"
+
+cat << EOF > /etc/ipsec.conf
+# /etc/ipsec.conf - Openswan IPsec configuration file
+
+# This file:  /usr/share/doc/openswan/ipsec.conf-sample
+#
+# Manual:     ipsec.conf.5
+
+
+version	2.0	# conforms to second version of ipsec.conf specification
+
+# basic configuration
+config setup
+	# Do not set debug options to debug configuration issues!
+	# plutodebug / klipsdebug = "all", "none" or a combation from below:
+	# "raw crypt parsing emitting control klips pfkey natt x509 dpd private"
+	# eg:
+	# plutodebug="control parsing"
+	#
+	# enable to get logs per-peer
+	# plutoopts="--perpeerlog"
+	#
+	# Again: only enable plutodebug or klipsdebug when asked by a developer
+	#
+	# NAT-TRAVERSAL support, see README.NAT-Traversal
+	nat_traversal=yes
+	# exclude networks used on server side by adding %v4:!a.b.c.0/24
+	virtual_private=%v4:10.0.0.0/8,%v4:192.168.0.0/16,%v4:172.16.0.0/12
+	# OE is now off by default. Uncomment and change to on, to enable.
+	oe=off
+	# which IPsec stack to use. netkey,klips,mast,auto or none
+	protostack=netkey
+
+
+# Configuration for connecting to an L2TP/IPsec server,
+# for example Windows Server 2003. The Linux client can
+# be behind NAT or not.
+# Authentication is through a Preshared Key.
+
+conn L2TP-PSK-CLIENT
+        #
+        # ----------------------------------------------------------
+        # Use a Preshared Key. Disable Perfect Forward Secrecy.
+        # Initiate rekeying.
+        # Connection type _must_ be Transport Mode.
+        #
+        authby=secret
+        pfs=no
+        #rekey=yes
+        rekey=no
+        keyingtries=3
+        type=transport
+        keyexchange=ike
+
+        #
+        # ----------------------------------------------------------
+        # The local Linux machine that connects as a client.
+        #
+        # The external network interface is used to connect to the server.
+        # If you want to use a different interface or if there is no
+        # defaultroute, you can use:   left=your.ip.addr.ess
+        left=%defaultroute
+        #
+        leftprotoport=17/1701
+        #
+        # ----------------------------------------------------------
+        # The remote server.
+        #
+        # Connect to the server at this IP address.
+        right=$SERVER
+        #
+        rightprotoport=17/1701
+        # ----------------------------------------------------------
+        #
+        # Change 'ignore' to 'add' to enable this configuration.
+        #
+        auto=add
+EOF
+
+
+cat << EOF > /etc/ipsec.secrets
+# RCSID $Id: ipsec.secrets.proto,v 1.3.6.1 2005/09/28 13:59:14 paul Exp $
+# This file holds shared secrets or RSA private keys for inter-Pluto
+# authentication.  See ipsec_pluto(8) manpage, and HTML documentation.
+
+# RSA private key for this host, authenticating it to any other host
+# which knows the public part.  Suitable public keys, for ipsec.conf, DNS,
+# or configuration of other implementations, can be extracted conveniently
+# with "ipsec showhostkey".
+
+# this file is managed with debconf and will contain the automatically created plain RSA key
+include /var/lib/openswan/ipsec.secrets.inc
+
+# usu psk
+%any $SERVER: PSK "$USU_GROUP_PASSWORD"
+EOF
+
+mkdir -p /etc/xl2tpd
+cat << EOF > /etc/xl2tpd/xl2tpd.conf
+[global]
+debug tunnel = yes
+
+[lac L2TPserver]
+lns = $SERVER
+require chap = yes
+refuse pap = yes
+require authentication = yes
+; Name should be the same as the username in the PPP authentication!
+name = $ANUMBER
+ppp debug = yes
+pppoptfile = /etc/ppp/options.l2tp
+length bit = yes
+EOF
+
+mkdir -p /etc/ppp
+cat << EOF > /etc/ppp/options.l2tp
+ipcp-accept-local
+ipcp-accept-remote
+require-mschap-v2
+refuse-mschap
+refuse-chap
+refuse-pap
+refuse-eap
+noccp
+noauth
+crtscts
+mtu 1410
+mru 1410
+debug
+dump
+lock
+connect-delay 5000
+logfile /var/log/xl2tpd.log
+EOF
+
+cat << EOF > /etc/ppp/chap-secrets
+# Secrets for authentication using CHAP
+# client	server	secret			IP addresses
+
+user	*	user
+
+$ANUMBER	*	"$PASSWORD"		*
+EOF
+
+    echo "Done writing config files"
 
     # Now that we have all the info, we can restart the services (instead of on start and stop)
+    # (appears that "restart" isn't very reliable)
+    /etc/init.d/xl2tpd stop
+    /etc/init.d/ipsec stop
+    sleep 5
+
+    /etc/init.d/ipsec start
+    /etc/init.d/xl2tpd start
 }
 
 checkroot
@@ -110,7 +266,7 @@ case "$1" in
         install_config
         ;;
     *)
-        echo "Usage: ./usu_vpn <start|stop>"
+        echo "Usage: ./usu_vpn <start|stop|install_config>"
         exit 1
 esac
 
