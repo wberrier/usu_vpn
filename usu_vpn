@@ -1,0 +1,116 @@
+#!/bin/bash
+
+# Script to start/stop vpn (l2tp over ipsec) to usu
+# Note: requires a very new openswan (2.6.31 or later?, with ALLOW_MICROSOFT_BAD_PROPOSAL)
+# (can get from: http://www.openswan.org/download/binaries/ubuntu/)
+# known to work on ubuntu 10.10 
+
+# usu vpn
+SERVER=129.123.67.252
+USU_NETWORK=129.123.0.0
+USU_NETWORK_NETMASK=255.255.0.0
+
+# current gateway and interface
+GATEWAY=$(route -n |grep ^0.0.0.0 | grep -w UG | awk '{print $2}' | head -n 1)
+IFACE=$(route -n |grep ^0.0.0.0 | grep -w UG | awk '{print $8}' | head -n 1)
+
+# Some shared vars...
+L2TPD_LOG=/var/log/xl2tpd.log
+TIMEOUT=10
+
+# Makes sure the script is running as root
+checkroot() 
+{
+    username=`whoami`
+
+    if [ $username != root ]; then
+        echo "Root or sudo privileges required."
+        exit
+    fi
+
+    return;
+}
+
+start ()
+{
+    # TODO: restarting is still finicky
+
+    # NOTE: we don't need to use usu dns since the hosts are public
+
+    /etc/init.d/ipsec restart
+    sleep 3
+    ipsec auto --up L2TP-PSK-CLIENT
+
+    # (appears that "restart" isn't very reliable)
+    /etc/init.d/xl2tpd stop
+    /etc/init.d/xl2tpd start
+    sleep 3
+
+    # Clean up old log
+    rm $L2TPD_LOG
+    echo "c L2TPserver" > /var/run/xl2tpd/l2tp-control
+    count=0
+    while [ ! -e $L2TPD_LOG ] ; do
+        echo "Waiting for xl2tpd..."
+        sleep 1
+        count=$((count + 1))
+        if [ $count -gt $TIMEOUT ] ; then
+            echo "Error: xl2tpd can't connect"
+            exit 1
+        fi
+    done
+
+    cat $L2TPD_LOG
+
+    echo "Adding routes"
+    # Make sure we don't try to connect to the vpn through the vpn
+    route add -host $SERVER gw $GATEWAY dev $IFACE
+
+    # Route all usu traffic through vpn
+    route add -net $USU_NETWORK netmask $USU_NETWORK_NETMASK  dev ppp0
+}
+
+stop ()
+{
+    echo "d L2TPserver" > /var/run/xl2tpd/l2tp-control
+    /etc/init.d/xl2tpd stop
+    tail $L2TPD_LOG
+
+    ipsec auto --down L2TP-PSK-CLIENT
+    /etc/init.d/ipsec stop
+
+    # Undo route
+    route del -host $SERVER dev $IFACE 2> /dev/null
+}
+
+install_config ()
+{
+    echo -n "Please enter your USU ANumber: "
+    read ANUMBER
+
+    echo -n "Please enter your USU password: "
+    read PASSWORD
+
+    echo $PASSWORD
+
+    # Now that we have all the info, we can restart the services (instead of on start and stop)
+}
+
+checkroot
+
+# See how we were called.
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    install_config)
+        install_config
+        ;;
+    *)
+        echo "Usage: ./usu_vpn <start|stop>"
+        exit 1
+esac
+
