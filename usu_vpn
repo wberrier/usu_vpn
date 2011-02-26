@@ -45,7 +45,7 @@ start ()
     vpn_interface=$(get_vpn_interface)
 
     # Clean up old log
-    rm $L2TPD_LOG
+    rm -f $L2TPD_LOG
     echo "c L2TPserver" > /var/run/xl2tpd/l2tp-control
     count=0
     while [ ! -e $L2TPD_LOG ] ; do
