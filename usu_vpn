@@ -1,9 +1,13 @@
 #!/bin/bash
 
 # Script to start/stop vpn (l2tp over ipsec) to usu
-# Note: requires a very new openswan (2.6.31 or later?, with ALLOW_MICROSOFT_BAD_PROPOSAL)
-# (can get from: http://www.openswan.org/download/binaries/ubuntu/)
-# known to work on ubuntu 10.10 
+# See README for more details
+
+# Option to make the vpn the default route
+# Edit this to make the usu vpn the default route
+# (This is necessary for accessing google scholar)
+# For now, this will have to be set by hand
+VPN_DEFAULT_ROUTE=1
 
 # usu vpn
 SERVER=129.123.67.252
@@ -36,6 +40,24 @@ get_vpn_interface()
     echo "ppp0"
 }
 
+wait_for_vpn_interface()
+{
+    interface=$(get_vpn_interface)
+    count=0
+
+    ret=1
+    echo "Waiting for interface ($interface) to come up"
+    while [ $count -lt 10 ] ; do
+        ifconfig ${interface} > /dev/null 2>&1 && { ret=0;  break ; }
+        echo -n "."
+        sleep 1
+        count=$((count+1))
+    done
+    echo ""
+
+    return $ret
+}
+
 start ()
 {
     # NOTE: we don't need to use usu dns since the hosts are public
@@ -48,24 +70,37 @@ start ()
     rm -f $L2TPD_LOG
     echo "c L2TPserver" > /var/run/xl2tpd/l2tp-control
     count=0
+    echo "Waiting for xl2tpd..."
     while [ ! -e $L2TPD_LOG ] ; do
-        echo "Waiting for xl2tpd..."
+        echo -n "."
         sleep 1
         count=$((count + 1))
         if [ $count -gt $TIMEOUT ] ; then
             echo "Error: unable to start connection with xl2tpd"
+            echo " (hint: try one more time)"
+            echo " (hint2: try restarting ipsec and xl2tpd)"
             exit 1
         fi
     done
+    echo ""
 
     cat $L2TPD_LOG
+
+    wait_for_vpn_interface || { echo "ERROR: interface ($vpn_interface) never came up" ; exit 1 ; }
 
     echo "Adding routes"
     # Make sure we don't try to connect to the vpn through the vpn
     route add -host $SERVER gw $GATEWAY dev $IFACE
 
     # Route all usu traffic through vpn
-    route add -net $USU_NETWORK netmask $USU_NETWORK_NETMASK  dev $vpn_interface
+    if [ $VPN_DEFAULT_ROUTE -eq 1 ] ; then
+        echo "Setting vpn to be the default route"
+        route add default dev $vpn_interface
+    else
+        # Otherwords only route the usu network
+        echo "Only routing the usu subnet"
+        route add -net $USU_NETWORK netmask $USU_NETWORK_NETMASK dev $vpn_interface
+    fi
 }
 
 stop ()

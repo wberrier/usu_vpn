@@ -4,9 +4,15 @@ This is tested and works on Ubuntu 10.10 with openswan 2.6.32.  It
 will probably work as long as version 2.6.27 is installed (which
 enables ALLOW_MICROSOFT_BAD_PROPOSAL).
 
+Update: it works on 11.04 with the openswan that ships in the default
+repositories (2.6.28).
+
 You can get an updated version for Ubuntu 10.10 from:
 
 http://www.openswan.org/download/binaries/ubuntu/
+
+Regarding the debconf questions: you don't need a client certificate
+and using netkey works just fine.
 
 *NOTE* This script totally blows away the configuration for ppp,
 xl2tpd, and ipsec, and replaces them with the necessary USU settings.  It
@@ -21,8 +27,9 @@ as well as on the info posted at:
 
 http://www.jacco2.dds.nl/networking/linux-l2tp.html
 
-This version doesn't make the vpn the default route, but only sets up the
-route necessary to connect to the usu subnet.
+You can set the variable VPN_DEFAULT_ROUTE at the top of the script to
+0 if you only want the USU subnet to be routed.  Otherwise, it
+defaults to routing all traffic through the vpn.
 
 This script doesn't use specific dns entries, since it appears that
 USU's public dns records worked fine.
