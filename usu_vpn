@@ -92,9 +92,13 @@ start ()
     # Make sure we don't try to connect to the vpn through the vpn
     route add -host $SERVER gw $GATEWAY dev $IFACE
 
+    # Not sure why this sleep helps fater wait_for_vpn_interface has finished
+    echo "Waiting for things to settle..."
+    sleep 3
+
     # Route all usu traffic through vpn
     if [ $VPN_DEFAULT_ROUTE -eq 1 ] ; then
-        echo "Setting vpn to be the default route"
+        echo "Setting vpn to be the default route: route add default dev $vpn_interface"
         route add default dev $vpn_interface
     else
         # Otherwords only route the usu network
